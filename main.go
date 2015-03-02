@@ -19,6 +19,11 @@ import (
 var defaultGitRepoUrl = "https://github.com/coreos/etcd.git"
 
 var (
+	stdoutChan chan string
+	stderrChan chan string
+)
+
+var (
 	etcdBinary string
 	gitCommit  string
 	gitRepoUrl string
@@ -43,7 +48,7 @@ var clientConfig *ssh.ClientConfig
 func main() {
 	if !(len(os.Args) > 1) {
 		log.Fatal("action required.")
-  	}
+	}
 	action := os.Args[1]
 	os.Args = append(os.Args[:1], os.Args[2:]...)
 
@@ -75,6 +80,10 @@ func main() {
 		log.Fatal("one or more hosts required, use the -host flag")
 	}
 
+	stderrChan = make(chan string, 0)
+	stdoutChan = make(chan string, 0)
+	go consoleWriter()
+
 	switch action {
 	case "deploy":
 		if etcdBinary != "" {
@@ -90,12 +99,24 @@ func main() {
 			os.Exit(0)
 		}
 	case "version":
-		etcdVersion(hostsList)	
+		etcdVersion(hostsList)
+	}
+}
+
+func consoleWriter() {
+	for {
+		select {
+		case msg := <-stderrChan:
+			fmt.Fprintf(os.Stderr, msg)
+		case msg := <-stdoutChan:
+			fmt.Fprintf(os.Stdout, msg)
+		}
 	}
 }
 
 func deployFromEtcdBinary(path string, hosts []string) {
 	copyOnAll(hosts, path)
+	etcdVersion(hosts)
 }
 
 func deployFromGitCommit(commit string, hosts []string) {
@@ -163,69 +184,90 @@ func copyOnAll(hosts []string, path string) {
 	wg.Wait()
 }
 
-func connectAndExec(host string, commands []string, wg *sync.WaitGroup) {
+func logStderr(host, message string) {
+	stderrChan <- fmt.Sprintf("%s:\n  => %s\n", host, message)
+	return
+}
+
+func connectAndExec(host string, commands []string, wg *sync.WaitGroup) error {
 	if wg != nil {
 		defer wg.Done()
 	}
+
 	client, err := ssh.Dial("tcp", host, clientConfig)
 	if err != nil {
-		log.Println("Failed to dial: ", err.Error())
-		return
+		logStderr(host, fmt.Sprintf("failed to create SSH connection: %s\n", err))
+		return err
 	}
 
 	for _, command := range commands {
 		if verbose {
-			fmt.Printf("%s:\n  => executing %s\n", host, command)
+			logStderr(host, fmt.Sprintf("executing %s", command))
 		}
+
 		session, err := client.NewSession()
 		if err != nil {
-			panic("Failed to create session: " + err.Error())
+			logStderr(host, fmt.Sprintf("failed to create SSH session: %s", err))
+			return err
 		}
+
 		defer session.Close()
 
 		var b bytes.Buffer
 		session.Stdout = &b
 
 		if err := session.Run(command); err != nil {
-			log.Println("Failed to run: ", err.Error())
-			return
+			logStderr(host, fmt.Sprintf("error running command: %s", err))
+			return err
 		}
+
 		output := b.String()
 		if output != "" {
-			fmt.Printf("%s:\n  => %s", host, output)
+			logStderr(host, output)
 		}
 	}
+	return nil
 }
 
-func connectAndUpload(host string, r io.Reader, wg *sync.WaitGroup) {
+func connectAndUpload(host string, r io.Reader, wg *sync.WaitGroup) error {
 	defer wg.Done()
 	client, err := ssh.Dial("tcp", host, clientConfig)
 	if err != nil {
-		log.Println("Failed to dial: ", err.Error())
-		return
+		logStderr(host, fmt.Sprintf("failed to create SSH connection: %s", err))
+		return err
 	}
 
 	sftpClient, err := sftp.NewClient(client)
 	if err != nil {
-		log.Println("Failed to create sftp client:", err)
-		return
+		logStderr(host, fmt.Sprintf("failed to create sftp client: %s", err))
+		return err
 	}
 
 	f, err := sftpClient.Create("/tmp/etcd")
 	if err != nil {
-		log.Println("failed to create file")
-		return
+		logStderr(host, fmt.Sprintf("failed to create /tmp/etcd: %s", err))
+		return err
 	}
-	defer f.Close()
 
-	fmt.Println("copying etcd binary to", host)
+	logStderr(host, "uploading etcd binary")
+
 	if _, err := io.Copy(f, r); err != nil {
-		log.Println("failed to copy file")
-		return
+		f.Close()
+		logStderr(host, fmt.Sprintf("upload failed: %s", err))
+		return err
+	}
+	f.Close()
+
+	err = connectAndExec(host, []string{"sudo mv /tmp/etcd /opt/etcd/bin/etcd"}, nil)
+	if err != nil {
+		return err
 	}
 
-	if err := sftpClient.Chmod("/tmp/etcd", 0755); err != nil {
-		log.Println("failed to chmod remote etcd binary")
-		return
+	if err := sftpClient.Chmod("/opt/etcd/bin/etcd", 0755); err != nil {
+		logStderr(host, fmt.Sprintf("failed to chmod remote etcd binary: %s", err))
+		return err
 	}
+	logStderr(host, "upload complete.")
+
+	return nil
 }
