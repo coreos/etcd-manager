@@ -2,12 +2,20 @@
 
 ## Usage
 
-The etcd-manager uses ssh to run remote commands on target etcd hosts. SSH auth requires and ssh-agent to be running.
+The etcd-manager uses ssh to run remote commands on target etcd hosts. SSH auth requires an ssh-agent to be running.
 Run the following command to ensure your SSH key is loaded:
 
 ```
 ssh-add /path/to/ssh-private-key
 ``` 
+
+### Get the etcd binary version
+
+The following command will run `/opt/etcd/bin/etcd -version` on each host.
+
+```
+etcd-manager version -hosts '130.211.162.53:22,107.178.221.96:22,104.154.62.70:22'
+```
 
 ### Deploy from a git tag
 

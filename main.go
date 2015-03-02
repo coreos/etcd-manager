@@ -41,7 +41,14 @@ func init() {
 var clientConfig *ssh.ClientConfig
 
 func main() {
+	if !(len(os.Args) > 1) {
+		log.Fatal("action required.")
+  	}
+	action := os.Args[1]
+	os.Args = append(os.Args[:1], os.Args[2:]...)
+
 	flag.Parse()
+
 	authSocket := os.Getenv("SSH_AUTH_SOCK")
 	if authSocket == "" {
 		log.Fatal("SSH_AUTH_SOCK required, check that your ssh agent is running")
@@ -68,19 +75,22 @@ func main() {
 		log.Fatal("one or more hosts required, use the -host flag")
 	}
 
-	if etcdBinary != "" {
-		deployFromEtcdBinary(etcdBinary, hostsList)
-		os.Exit(0)
-	}
-
-	if gitCommit != "" {
-		deployFromGitCommit(gitCommit, hostsList)
-		os.Exit(0)
-	}
-
-	if gitTag != "" {
-		deployFromGitTag(gitTag, hostsList)
-		os.Exit(0)
+	switch action {
+	case "deploy":
+		if etcdBinary != "" {
+			deployFromEtcdBinary(etcdBinary, hostsList)
+			os.Exit(0)
+		}
+		if gitCommit != "" {
+			deployFromGitCommit(gitCommit, hostsList)
+			os.Exit(0)
+		}
+		if gitTag != "" {
+			deployFromGitTag(gitTag, hostsList)
+			os.Exit(0)
+		}
+	case "version":
+		etcdVersion(hostsList)	
 	}
 }
 
@@ -118,6 +128,16 @@ func etcdVersion(hosts []string) {
 	runOnAll(hosts, commands)
 }
 
+func restartCluster(hosts []string) {
+	commands := []string{
+		"sudo bash -c 'systemctl restart etcd'",
+		"sudo bash -c 'systemctl status etcd'",
+	}
+	for _, host := range hosts {
+		connectAndExec(host, commands, nil)
+	}
+}
+
 func runOnAll(hosts, commands []string) {
 	var wg sync.WaitGroup
 	for _, host := range hosts {
@@ -144,7 +164,9 @@ func copyOnAll(hosts []string, path string) {
 }
 
 func connectAndExec(host string, commands []string, wg *sync.WaitGroup) {
-	defer wg.Done()
+	if wg != nil {
+		defer wg.Done()
+	}
 	client, err := ssh.Dial("tcp", host, clientConfig)
 	if err != nil {
 		log.Println("Failed to dial: ", err.Error())
@@ -153,7 +175,7 @@ func connectAndExec(host string, commands []string, wg *sync.WaitGroup) {
 
 	for _, command := range commands {
 		if verbose {
-			fmt.Printf("%s:\n    => executing %s\n", host, command)
+			fmt.Printf("%s:\n  => executing %s\n", host, command)
 		}
 		session, err := client.NewSession()
 		if err != nil {
@@ -170,7 +192,7 @@ func connectAndExec(host string, commands []string, wg *sync.WaitGroup) {
 		}
 		output := b.String()
 		if output != "" {
-			fmt.Printf("%s:\n    => %s", host, output)
+			fmt.Printf("%s:\n  => %s", host, output)
 		}
 	}
 }
