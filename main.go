@@ -25,6 +25,7 @@ var (
 	gitTag     string
 	hosts      string
 	sshUser    string
+	verbose    bool
 )
 
 func init() {
@@ -34,6 +35,7 @@ func init() {
 	flag.StringVar(&gitTag, "tag", "", "git tag to deploy")
 	flag.StringVar(&hosts, "hosts", "", "comma separated list of etcd hosts")
 	flag.StringVar(&sshUser, "user", "core", "ssh login username")
+	flag.BoolVar(&verbose, "verbose", false, "enable verbose output")
 }
 
 var clientConfig *ssh.ClientConfig
@@ -91,6 +93,8 @@ func deployFromGitCommit(commit string, hosts []string) {
 		"sudo bash -c 'if [ ! -e /opt/etcd ] ; then git clone https://github.com/coreos/etcd.git /opt/etcd ; fi'",
 		"sudo bash -c 'cd /opt/etcd && git fetch'",
 		fmt.Sprintf("sudo bash -c 'cd /opt/etcd && git reset --hard %s'", commit),
+		"docker run -v /opt/etcd:/opt/etcd -t google/golang /bin/bash -c 'cd /opt/etcd && ./build'",
+		"/opt/etcd/bin/etcd --version",
 	}
 	runOnAll(hosts, commands)
 }
@@ -101,10 +105,18 @@ func deployFromGitTag(tag string, hosts []string) {
 		"sudo bash -c 'cd /opt/etcd && git fetch'",
 		"sudo bash -c 'cd /opt/etcd && git reset --hard HEAD'",
 		fmt.Sprintf("sudo bash -c 'cd /opt/etcd && git checkout tags/%s'", tag),
+		"docker run -v /opt/etcd:/opt/etcd -t google/golang /bin/bash -c 'cd /opt/etcd && ./build'",
+		"/opt/etcd/bin/etcd --version",
 	}
 	runOnAll(hosts, commands)
 }
 
+func etcdVersion(hosts []string) {
+	commands := []string{
+		"/opt/etcd/bin/etcd --version",
+	}
+	runOnAll(hosts, commands)
+}
 
 func runOnAll(hosts, commands []string) {
 	var wg sync.WaitGroup
@@ -140,7 +152,9 @@ func connectAndExec(host string, commands []string, wg *sync.WaitGroup) {
 	}
 
 	for _, command := range commands {
-		fmt.Printf(" => executing on %s on %s\n", command, host)
+		if verbose {
+			fmt.Printf("%s:\n    => executing %s\n", host, command)
+		}
 		session, err := client.NewSession()
 		if err != nil {
 			panic("Failed to create session: " + err.Error())
@@ -156,7 +170,7 @@ func connectAndExec(host string, commands []string, wg *sync.WaitGroup) {
 		}
 		output := b.String()
 		if output != "" {
-			fmt.Println(output)
+			fmt.Printf("%s:\n    => %s", host, output)
 		}
 	}
 }
@@ -181,7 +195,7 @@ func connectAndUpload(host string, r io.Reader, wg *sync.WaitGroup) {
 		return
 	}
 	defer f.Close()
-	
+
 	fmt.Println("copying etcd binary to", host)
 	if _, err := io.Copy(f, r); err != nil {
 		log.Println("failed to copy file")
