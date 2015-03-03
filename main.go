@@ -126,6 +126,7 @@ func deployFromGitCommit(commit string, hosts []string) {
 		fmt.Sprintf("sudo bash -c 'cd /opt/etcd && git reset --hard %s'", commit),
 		"docker run -v /opt/etcd:/opt/etcd -t google/golang /bin/bash -c 'cd /opt/etcd && ./build'",
 		"/opt/etcd/bin/etcd --version",
+		"sudo bash -c 'systemctl restart etcd'",
 	}
 	runOnAll(hosts, commands)
 }
@@ -138,6 +139,7 @@ func deployFromGitTag(tag string, hosts []string) {
 		fmt.Sprintf("sudo bash -c 'cd /opt/etcd && git checkout tags/%s'", tag),
 		"docker run -v /opt/etcd:/opt/etcd -t google/golang /bin/bash -c 'cd /opt/etcd && ./build'",
 		"/opt/etcd/bin/etcd --version",
+		"sudo bash -c 'systemctl restart etcd'",
 	}
 	runOnAll(hosts, commands)
 }
